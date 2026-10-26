@@ -1,0 +1,6 @@
+{
+  "name": "StudyBuddy",
+  "description": "Ruang Fokus & Teman Belajar Pomodoro untuk Mahasiswa",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
