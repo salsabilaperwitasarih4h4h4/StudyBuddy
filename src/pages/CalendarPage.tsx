@@ -1,6 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CalendarTask, TaskPriority } from '../types';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, CheckSquare, Square, Trash2, Plus, Sparkles, Clock } from 'lucide-react';
+import { notificationService } from '../services/notificationService';
+import { 
+  ChevronLeft, ChevronRight, Calendar as CalendarIcon, CheckSquare, 
+  Square, Trash2, Plus, Sparkles, Clock, BellRing 
+} from 'lucide-react';
 
 interface CalendarPageProps {
   tasks: CalendarTask[];
@@ -24,6 +28,28 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({
   const [course, setCourse] = useState('');
   const [priority, setPriority] = useState<TaskPriority>('Sedang');
 
+  // Device Notification Permission State
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>('default');
+  const [testSent, setTestSent] = useState<boolean>(false);
+
+  useEffect(() => {
+    setNotifPermission(notificationService.getPermissionStatus());
+  }, []);
+
+  const handleRequestPermission = async () => {
+    const granted = await notificationService.requestPermission();
+    setNotifPermission(granted ? 'granted' : 'denied');
+  };
+
+  const handleTestNotification = async () => {
+    const success = await notificationService.sendTestNotification();
+    if (success) {
+      setNotifPermission('granted');
+      setTestSent(true);
+      setTimeout(() => setTestSent(false), 2500);
+    }
+  };
+
   // Calendar month state
   const [viewDate, setViewDate] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState<string | null>(dueDate);
@@ -31,6 +57,13 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !dueDate) return;
+
+    // Auto-prompt permission if not granted yet
+    if (notifPermission === 'default') {
+      notificationService.requestPermission().then((granted) => {
+        setNotifPermission(granted ? 'granted' : 'denied');
+      });
+    }
 
     const newTask: CalendarTask = {
       id: 'task-' + Date.now(),
@@ -86,16 +119,28 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({
     <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-6">
       {/* Top Form Card */}
       <div className="bg-white rounded-3xl p-6 sm:p-8 border border-[#E3DDD2] shadow-xs">
-        <div className="mb-6">
-          <span className="text-[10px] font-bold tracking-widest uppercase text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full inline-block mb-1.5">
-            ATUR TENGGAT
-          </span>
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-[#162B20]">
-            Kalender tugas
-          </h2>
-          <p className="text-xs sm:text-sm text-stone-500 mt-1">
-            Pantau tugas apa dikumpulkan hari apa beserta jam tenggat agar jadwal pengumpulan selalu terorganisir rapi.
-          </p>
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <span className="text-[10px] font-bold tracking-widest uppercase text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full inline-block mb-1.5">
+              ATUR TENGGAT
+            </span>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-[#162B20]">
+              Kalender tugas
+            </h2>
+          </div>
+
+          {/* Minimal notification button to keep UI clean and simple */}
+          <button
+            type="button"
+            onClick={notifPermission === 'granted' ? handleTestNotification : handleRequestPermission}
+            title={notifPermission === 'granted' ? 'Notifikasi tugas aktif di perangkat ini (klik untuk uji coba)' : 'Klik untuk mengizinkan notifikasi tugas'}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[#E3DDD2] bg-[#FAF8F5] hover:bg-[#F2ECE1] text-[11px] font-medium text-stone-600 transition-colors cursor-pointer shrink-0"
+          >
+            <BellRing className={`w-3.5 h-3.5 ${notifPermission === 'granted' ? 'text-emerald-700' : 'text-amber-600'}`} />
+            <span className="hidden sm:inline">
+              {testSent ? 'Terkirim! ✓' : notifPermission === 'granted' ? 'Notifikasi Aktif' : 'Izin Notifikasi'}
+            </span>
+          </button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">

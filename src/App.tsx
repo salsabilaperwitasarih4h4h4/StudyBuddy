@@ -17,7 +17,9 @@ import { audioService } from './services/audioService';
 
 import { HeaderNav } from './components/HeaderNav';
 import { AlarmModal } from './components/AlarmModal';
+import { TaskDeadlineModal } from './components/TaskDeadlineModal';
 import { SensorAlertModal } from './components/SensorAlertModal';
+import { notificationService } from './services/notificationService';
 
 import { LoginPage } from './pages/LoginPage';
 import { NavigationPage } from './pages/NavigationPage';
@@ -52,34 +54,81 @@ export default function App() {
   const [ringingAlarm, setRingingAlarm] = useState<AlarmItem | null>(null);
 
   const [tasks, setTasks] = useState<CalendarTask[]>(() => getStoredTasks());
+  const [dueTask, setDueTask] = useState<CalendarTask | null>(null);
+  const [notifiedTaskIds, setNotifiedTaskIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('studybuddy_notified_task_ids');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [notes, setNotes] = useState<LectureNote[]>(() => getStoredNotes());
   const [plant, setPlant] = useState<PlantState>(() => getStoredPlant());
   const [logs, setLogs] = useState<StudyDayLog[]>(() => getStoredLogs());
 
-  // Ref to keep current alarms accessible in ticker interval without stale closures
+  // Ref to keep current alarms & tasks accessible in ticker interval without stale closures
   const alarmsRef = useRef(alarms);
   alarmsRef.current = alarms;
 
   const ringingAlarmRef = useRef(ringingAlarm);
   ringingAlarmRef.current = ringingAlarm;
 
-  // 1. Alarm ticker check (every 1 second)
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+
+  const dueTaskRef = useRef(dueTask);
+  dueTaskRef.current = dueTask;
+
+  const notifiedTaskIdsRef = useRef(notifiedTaskIds);
+  notifiedTaskIdsRef.current = notifiedTaskIds;
+
+  // 1. Alarm & Calendar Task Deadline Ticker Check (every 1 second)
   useEffect(() => {
     const interval = setInterval(() => {
-      if (ringingAlarmRef.current) return;
-
       const now = new Date().getTime();
-      const currentAlarms = alarmsRef.current;
 
-      const due = currentAlarms.find((a) => {
-        if (!a.enabled || a.dismissed) return false;
-        const targetTime = new Date(a.datetime).getTime();
-        return now >= targetTime && now <= targetTime + 60 * 60 * 1000;
-      });
+      // Check Alarms
+      if (!ringingAlarmRef.current) {
+        const currentAlarms = alarmsRef.current;
+        const due = currentAlarms.find((a) => {
+          if (!a.enabled || a.dismissed) return false;
+          const targetTime = new Date(a.datetime).getTime();
+          return now >= targetTime && now <= targetTime + 60 * 60 * 1000;
+        });
 
-      if (due) {
-        setRingingAlarm(due);
-        audioService.playRingtone(due.tone, true);
+        if (due) {
+          setRingingAlarm(due);
+          audioService.playRingtone(due.tone, true);
+        }
+      }
+
+      // Check Calendar Task Deadlines across any device
+      if (!dueTaskRef.current && !ringingAlarmRef.current) {
+        const currentTasks = tasksRef.current;
+        const notified = notifiedTaskIdsRef.current;
+
+        const dueT = currentTasks.find((t) => {
+          if (t.completed || notified.includes(t.id)) return false;
+          const timePart = t.dueTime ? `${t.dueTime}:00` : '23:59:00';
+          const targetTimestamp = new Date(`${t.dueDate}T${timePart}`).getTime();
+          if (isNaN(targetTimestamp)) return false;
+          // Trigger when reached deadline and within 24 hours
+          return now >= targetTimestamp && now <= targetTimestamp + 24 * 60 * 60 * 1000;
+        });
+
+        if (dueT) {
+          setDueTask(dueT);
+          notificationService.triggerTaskDeadlineNotification(dueT);
+          setNotifiedTaskIds((prev) => {
+            const nextList = [...prev, dueT.id];
+            try {
+              localStorage.setItem('studybuddy_notified_task_ids', JSON.stringify(nextList));
+            } catch {}
+            return nextList;
+          });
+        }
       }
     }, 1000);
 
@@ -272,6 +321,10 @@ export default function App() {
   };
 
   const handleToggleTaskComplete = (taskId: string) => {
+    if (dueTask && dueTask.id === taskId) {
+      audioService.stopAlarm();
+      setDueTask(null);
+    }
     setTasks((prev) => {
       const updated = prev.map((t) =>
         t.id === taskId ? { ...t, completed: !t.completed } : t
@@ -282,9 +335,51 @@ export default function App() {
   };
 
   const handleDeleteTask = (taskId: string) => {
+    if (dueTask && dueTask.id === taskId) {
+      audioService.stopAlarm();
+      setDueTask(null);
+    }
     setTasks((prev) => {
       const updated = prev.filter((t) => t.id !== taskId);
       saveTasks(updated);
+      return updated;
+    });
+  };
+
+  // Due Task Deadline Notification Actions
+  const handleDismissDueTask = () => {
+    audioService.stopAlarm();
+    setDueTask(null);
+  };
+
+  const handleCompleteDueTask = (taskId: string) => {
+    audioService.stopAlarm();
+    setDueTask(null);
+    handleToggleTaskComplete(taskId);
+  };
+
+  const handleSnoozeDueTask = (taskId: string) => {
+    audioService.stopAlarm();
+    setDueTask(null);
+    // Push deadline 15 minutes forward
+    const nowPlus15 = new Date(Date.now() + 15 * 60 * 1000);
+    const newDate = `${nowPlus15.getFullYear()}-${String(nowPlus15.getMonth() + 1).padStart(2, '0')}-${String(nowPlus15.getDate()).padStart(2, '0')}`;
+    const newTime = `${String(nowPlus15.getHours()).padStart(2, '0')}:${String(nowPlus15.getMinutes()).padStart(2, '0')}`;
+
+    setTasks((prev) => {
+      const updated = prev.map((t) =>
+        t.id === taskId ? { ...t, dueDate: newDate, dueTime: newTime } : t
+      );
+      saveTasks(updated);
+      return updated;
+    });
+
+    // Unmark from notifiedTaskIds so it triggers again after 15 mins
+    setNotifiedTaskIds((prev) => {
+      const updated = prev.filter((id) => id !== taskId);
+      try {
+        localStorage.setItem('studybuddy_notified_task_ids', JSON.stringify(updated));
+      } catch {}
       return updated;
     });
   };
@@ -351,6 +446,14 @@ export default function App() {
         alarm={ringingAlarm}
         onDismiss={handleDismissAlarm}
         onSnooze={handleSnoozeAlarm}
+      />
+
+      {/* Real-time Task Deadline Notification Modal */}
+      <TaskDeadlineModal
+        task={dueTask}
+        onDismiss={handleDismissDueTask}
+        onComplete={handleCompleteDueTask}
+        onSnooze={handleSnoozeDueTask}
       />
 
       {/* Sensor Deteksi Keluar Web Alert Modal */}
